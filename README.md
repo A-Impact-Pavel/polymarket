@@ -41,16 +41,22 @@ cp .env.example .env
 
 ### 1. Initial Scan
 
-First, scan Polymarket to populate the database:
+First, scan Polymarket to populate the database. **For testing, start with a limited number of markets:**
 
 ```bash
+# Scan with limit (recommended for first run)
+python polymarket_scanner.py scan --limit 100
+
+# Or scan all markets (may take a long time - 60,000+ markets!)
 python polymarket_scanner.py scan
 ```
 
 This will:
-- Fetch all markets from Polymarket
+- Fetch markets from Polymarket (up to the specified limit)
 - Store market data in the database
 - Record current prices for all active markets
+
+**Note:** Without a limit, scanning can take 30+ minutes and store 60,000+ markets. Start with `--limit 100` to test the system first.
 
 ### 2. Check for Changes
 
@@ -119,6 +125,18 @@ Press `Ctrl+C` to stop the scheduler.
 Perform a full scan of Polymarket markets and prices.
 
 ```bash
+python polymarket_scanner.py scan [OPTIONS]
+
+Options:
+  -l, --limit INTEGER  Maximum number of markets to fetch (default: all)
+```
+
+**Examples:**
+```bash
+# Scan 100 markets (recommended for testing)
+python polymarket_scanner.py scan --limit 100
+
+# Scan all markets
 python polymarket_scanner.py scan
 ```
 
@@ -190,6 +208,7 @@ DATABASE_PATH=polymarket_data.db
 SCAN_INTERVAL_SECONDS=300        # Scan every 5 minutes
 DEFAULT_CHANGE_THRESHOLD=5       # Alert on 5% change
 TIME_WINDOW_MINUTES=60           # Check changes within last 60 minutes
+DEFAULT_MARKET_LIMIT=0           # Max markets to fetch (0 = no limit, e.g., 100 for testing)
 
 # API Settings
 CLOB_API_URL=https://clob.polymarket.com

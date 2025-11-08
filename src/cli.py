@@ -22,12 +22,16 @@ def cli():
 
 
 @cli.command()
-def scan():
+@click.option('--limit', '-l', default=None, type=int, help='Maximum number of markets to fetch (default: all)')
+def scan(limit):
     """Perform a full scan of Polymarket markets and prices"""
     scanner = PolymarketScanner()
 
+    if limit:
+        console.print(f"[yellow]Limiting scan to {limit} markets[/yellow]")
+
     with console.status("[bold green]Scanning Polymarket..."):
-        result = scanner.full_scan()
+        result = scanner.full_scan(market_limit=limit)
 
     console.print(Panel(
         f"[green]✓[/green] Scan completed!\n\n"

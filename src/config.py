@@ -18,6 +18,7 @@ class Config:
     SCAN_INTERVAL_SECONDS = int(os.getenv('SCAN_INTERVAL_SECONDS', '300'))
     DEFAULT_CHANGE_THRESHOLD = float(os.getenv('DEFAULT_CHANGE_THRESHOLD', '5'))
     TIME_WINDOW_MINUTES = int(os.getenv('TIME_WINDOW_MINUTES', '60'))
+    DEFAULT_MARKET_LIMIT = int(os.getenv('DEFAULT_MARKET_LIMIT', '0'))  # 0 = no limit
 
     # API settings
     CLOB_API_URL = os.getenv('CLOB_API_URL', 'https://clob.polymarket.com')

@@ -20,9 +20,16 @@ class PolymarketScanner:
             chain_id=Config.CHAIN_ID
         )
 
-    def fetch_all_markets(self) -> List[Dict[str, Any]]:
-        """Fetch all markets from Polymarket API with pagination"""
-        print("Fetching markets from Polymarket...")
+    def fetch_all_markets(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Fetch all markets from Polymarket API with pagination
+
+        Args:
+            limit: Maximum number of markets to fetch. None = fetch all markets.
+        """
+        if limit:
+            print(f"Fetching up to {limit} markets from Polymarket...")
+        else:
+            print("Fetching all markets from Polymarket...")
 
         markets_list = []
         next_cursor = None
@@ -38,12 +45,24 @@ class PolymarketScanner:
                 if 'data' not in response or not response['data']:
                     break
 
-                markets_list.extend(response['data'])
-                print(f"  Fetched page {page}: {len(response['data'])} markets (total: {len(markets_list)})")
+                # Check if we need to limit results
+                if limit and len(markets_list) + len(response['data']) > limit:
+                    remaining = limit - len(markets_list)
+                    markets_list.extend(response['data'][:remaining])
+                    print(f"  Fetched page {page}: {remaining} markets (total: {len(markets_list)})")
+                    print(f"✓ Reached limit of {limit} markets")
+                    break
+                else:
+                    markets_list.extend(response['data'])
+                    print(f"  Fetched page {page}: {len(response['data'])} markets (total: {len(markets_list)})")
 
                 next_cursor = response.get('next_cursor')
 
                 if not next_cursor:
+                    break
+
+                # Stop if we've reached the limit
+                if limit and len(markets_list) >= limit:
                     break
 
                 page += 1
@@ -85,9 +104,13 @@ class PolymarketScanner:
             # Token might not have prices yet or be inactive
             return None
 
-    def scan_and_store_markets(self) -> int:
-        """Scan markets and store in database"""
-        markets = self.fetch_all_markets()
+    def scan_and_store_markets(self, limit: Optional[int] = None) -> int:
+        """Scan markets and store in database
+
+        Args:
+            limit: Maximum number of markets to fetch. None = fetch all markets.
+        """
+        markets = self.fetch_all_markets(limit=limit)
         stored_count = 0
 
         print("Storing markets in database...")
@@ -162,16 +185,22 @@ class PolymarketScanner:
         print(f"✓ Stored {stored_count} price points ({errors} errors)")
         return stored_count
 
-    def full_scan(self) -> Dict[str, int]:
-        """Perform a full scan: fetch markets and prices"""
+    def full_scan(self, market_limit: Optional[int] = None) -> Dict[str, int]:
+        """Perform a full scan: fetch markets and prices
+
+        Args:
+            market_limit: Maximum number of markets to fetch. None = fetch all markets.
+        """
         print("\n" + "="*60)
         print("Starting full Polymarket scan...")
+        if market_limit:
+            print(f"Market limit: {market_limit}")
         print("="*60 + "\n")
 
         start_time = time.time()
 
         # Scan markets
-        markets_count = self.scan_and_store_markets()
+        markets_count = self.scan_and_store_markets(limit=market_limit)
 
         # Scan prices
         prices_count = self.scan_and_store_prices()
