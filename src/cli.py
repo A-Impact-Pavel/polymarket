@@ -43,6 +43,30 @@ def scan(limit):
     ))
 
 
+@cli.command('scan-active')
+@click.option('--limit', '-l', default=None, type=int, help='Maximum number of active markets to fetch')
+def scan_active(limit):
+    """Scan only active markets (faster, includes prices)"""
+    import time
+    scanner = PolymarketScanner()
+
+    console.print("[cyan]Scanning active markets with prices...[/cyan]\n")
+
+    start_time = time.time()
+    with console.status("[bold green]Fetching active markets..."):
+        result = scanner.scan_and_store_with_prices(limit=limit)
+    elapsed = time.time() - start_time
+
+    console.print(Panel(
+        f"[green]✓[/green] Active scan completed!\n\n"
+        f"Markets: {result['markets']}\n"
+        f"Prices: {result['prices']}\n"
+        f"Time: {elapsed:.2f}s",
+        title="Active Scan Results",
+        border_style="green"
+    ))
+
+
 @cli.command()
 @click.option('--threshold', '-t', default=None, type=float, help='Change threshold percentage')
 @click.option('--window', '-w', default=None, type=int, help='Time window in minutes')

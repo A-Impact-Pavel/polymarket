@@ -74,14 +74,105 @@ class PolymarketScanner:
         print(f"✓ Fetched {len(markets_list)} total markets")
         return markets_list
 
-    def fetch_simplified_markets(self) -> List[Dict[str, Any]]:
-        """Fetch simplified market data (faster, less detailed)"""
+    def fetch_simplified_markets(self, active_only: bool = True) -> List[Dict[str, Any]]:
+        """Fetch simplified market data with embedded prices (faster)
+
+        Args:
+            active_only: If True, only return markets accepting orders
+        """
         try:
             response = self.client.get_simplified_markets()
-            return response.get('data', [])
+            markets = response.get('data', [])
+
+            if active_only:
+                markets = [m for m in markets if m.get('accepting_orders')]
+                print(f"Filtered to {len(markets)} markets accepting orders")
+
+            return markets
         except Exception as e:
             print(f"Error fetching simplified markets: {e}")
             return []
+
+    def scan_and_store_with_prices(self, limit: Optional[int] = None) -> Dict[str, int]:
+        """Scan active markets and store with prices
+
+        This method:
+        1. Gets simplified markets to find which are accepting orders
+        2. Fetches full details for those markets
+        3. Gets prices from simplified endpoint
+        """
+        print("Finding active markets...")
+
+        # Get simplified markets to find active ones
+        simplified_markets = self.fetch_simplified_markets(active_only=True)
+
+        if not simplified_markets:
+            print("No active markets found!")
+            return {'markets': 0, 'prices': 0}
+
+        # Get condition IDs of active markets
+        active_condition_ids = {m['condition_id'] for m in simplified_markets}
+        print(f"Found {len(active_condition_ids)} active markets")
+
+        # Fetch full market details
+        print("Fetching full market details...")
+        all_markets = self.fetch_all_markets(limit=None)  # Get all markets
+
+        # Filter for active markets and apply limit
+        active_markets = [m for m in all_markets if m['condition_id'] in active_condition_ids]
+
+        if limit and len(active_markets) > limit:
+            active_markets = active_markets[:limit]
+            print(f"Limited to {limit} markets")
+
+        # Create price lookup from simplified markets
+        price_lookup = {}
+        for sm in simplified_markets:
+            cond_id = sm['condition_id']
+            if 'tokens' in sm:
+                for token in sm['tokens']:
+                    price_lookup[token['token_id']] = token.get('price')
+
+        markets_stored = 0
+        prices_stored = 0
+
+        print(f"Storing {len(active_markets)} markets with prices...")
+
+        for market in active_markets:
+            try:
+                # Store market
+                self.db.upsert_market(market)
+
+                # Store tokens with prices
+                if 'tokens' in market and isinstance(market['tokens'], list):
+                    for token in market['tokens']:
+                        # Store token
+                        self.db.upsert_token(
+                            token_id=token['token_id'],
+                            condition_id=market['condition_id'],
+                            outcome=token.get('outcome', 'UNKNOWN')
+                        )
+
+                        # Store price if available
+                        token_id = token['token_id']
+                        if token_id in price_lookup and price_lookup[token_id] is not None:
+                            self.db.insert_price(
+                                token_id=token_id,
+                                condition_id=market['condition_id'],
+                                price=float(price_lookup[token_id])
+                            )
+                            prices_stored += 1
+
+                markets_stored += 1
+
+            except Exception as e:
+                print(f"Error storing market {market.get('condition_id', 'unknown')}: {e}")
+
+        print(f"✓ Stored {markets_stored} markets and {prices_stored} prices")
+        return {
+            'markets': markets_stored,
+            'prices': prices_stored
+        }
 
     def fetch_market_prices(self, token_id: str) -> Optional[Dict[str, Any]]:
         """Fetch current price data for a specific token"""
