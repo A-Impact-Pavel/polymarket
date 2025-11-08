@@ -117,13 +117,14 @@ class PolymarketScanner:
         total_active = len(active_condition_ids)
         print(f"✓ Found {total_active} active markets to fetch\n")
 
-        # Fetch full market details in batches
-        print(f"[2/3] Fetching full details (batch size: 1000)...")
+        # Fetch full market details in batches using pagination
+        print(f"[2/3] Fetching full details with pagination...")
 
         active_markets = []
         found_ids = set()
-        batch_size = 1000
         total_fetched = 0
+        next_cursor = None
+        batch_num = 0
 
         with Progress(
             SpinnerColumn(),
@@ -137,42 +138,57 @@ class PolymarketScanner:
             )
 
             while len(found_ids) < total_active:
-                # Fetch next batch
-                batch = self.fetch_all_markets(limit=batch_size)
+                # Fetch next page of markets
+                try:
+                    if next_cursor is None:
+                        response = self.client.get_markets()
+                    else:
+                        response = self.client.get_markets(next_cursor=next_cursor)
 
-                if not batch:
-                    break
+                    if 'data' not in response or not response['data']:
+                        break
 
-                total_fetched += len(batch)
+                    batch = response['data']
+                    batch_num += 1
+                    total_fetched += len(batch)
 
-                # Filter for active markets
-                for market in batch:
-                    if market['condition_id'] in active_condition_ids:
-                        if market['condition_id'] not in found_ids:
-                            active_markets.append(market)
-                            found_ids.add(market['condition_id'])
-                            progress.update(task, completed=len(found_ids))
+                    # Filter for active markets
+                    for market in batch:
+                        if market['condition_id'] in active_condition_ids:
+                            if market['condition_id'] not in found_ids:
+                                active_markets.append(market)
+                                found_ids.add(market['condition_id'])
+                                progress.update(task, completed=len(found_ids))
 
-                # Early exit if we found all active markets
-                if len(found_ids) >= total_active:
-                    progress.update(task, description=f"[green]✓ Found all {total_active} active markets")
-                    break
+                    # Early exit if we found all active markets
+                    if len(found_ids) >= total_active:
+                        progress.update(task, description=f"[green]✓ Found all {total_active} active markets")
+                        break
 
-                # Update progress
-                progress.update(
-                    task,
-                    description=f"[cyan]Found {len(found_ids)}/{total_active} (scanned {total_fetched} markets)"
-                )
-
-                # Stop if we've scanned too many markets without finding all
-                if total_fetched > 5000 and len(found_ids) < total_active * 0.8:
+                    # Update progress
                     progress.update(
                         task,
-                        description=f"[yellow]Found {len(found_ids)}/{total_active} markets (stopped after {total_fetched})"
+                        description=f"[cyan]Found {len(found_ids)}/{total_active} (batch {batch_num}, scanned {total_fetched})"
                     )
+
+                    # Check if there are more pages
+                    next_cursor = response.get('next_cursor')
+                    if not next_cursor:
+                        # No more markets to fetch
+                        progress.update(
+                            task,
+                            description=f"[yellow]Scanned all markets, found {len(found_ids)}/{total_active}"
+                        )
+                        break
+
+                    # Rate limiting between batches
+                    time.sleep(0.1)
+
+                except Exception as e:
+                    print(f"\n  Error fetching batch: {e}")
                     break
 
-        print(f"\n✓ Fetched details for {len(active_markets)} active markets (scanned {total_fetched} total)\n")
+        print(f"\n✓ Fetched details for {len(active_markets)} active markets (scanned {total_fetched} total in {batch_num} batches)\n")
 
         # Apply user limit if specified
         if limit and len(active_markets) > limit:
