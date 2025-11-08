@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 from py_clob_client.client import ClobClient
 from py_clob_client.clob_types import ApiCreds
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 
 from .config import Config
 from .database import Database
@@ -94,14 +95,15 @@ class PolymarketScanner:
             return []
 
     def scan_and_store_with_prices(self, limit: Optional[int] = None) -> Dict[str, int]:
-        """Scan active markets and store with prices
+        """Scan active markets and store with prices (optimized with batch fetching)
 
         This method:
         1. Gets simplified markets to find which are accepting orders
-        2. Fetches full details for those markets
-        3. Gets prices from simplified endpoint
+        2. Fetches full details in batches until all active markets found
+        3. Stores prices from simplified endpoint
+        4. Shows progress with visual indicators
         """
-        print("Finding active markets...")
+        print("\n[1/3] Finding active markets...")
 
         # Get simplified markets to find active ones
         simplified_markets = self.fetch_simplified_markets(active_only=True)
@@ -112,63 +114,124 @@ class PolymarketScanner:
 
         # Get condition IDs of active markets
         active_condition_ids = {m['condition_id'] for m in simplified_markets}
-        print(f"Found {len(active_condition_ids)} active markets")
+        total_active = len(active_condition_ids)
+        print(f"✓ Found {total_active} active markets to fetch\n")
 
-        # Fetch full market details
-        print("Fetching full market details...")
-        all_markets = self.fetch_all_markets(limit=None)  # Get all markets
+        # Fetch full market details in batches
+        print(f"[2/3] Fetching full details (batch size: 1000)...")
 
-        # Filter for active markets and apply limit
-        active_markets = [m for m in all_markets if m['condition_id'] in active_condition_ids]
+        active_markets = []
+        found_ids = set()
+        batch_size = 1000
+        total_fetched = 0
 
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+        ) as progress:
+            task = progress.add_task(
+                f"[cyan]Searching for active markets...",
+                total=total_active
+            )
+
+            while len(found_ids) < total_active:
+                # Fetch next batch
+                batch = self.fetch_all_markets(limit=batch_size)
+
+                if not batch:
+                    break
+
+                total_fetched += len(batch)
+
+                # Filter for active markets
+                for market in batch:
+                    if market['condition_id'] in active_condition_ids:
+                        if market['condition_id'] not in found_ids:
+                            active_markets.append(market)
+                            found_ids.add(market['condition_id'])
+                            progress.update(task, completed=len(found_ids))
+
+                # Early exit if we found all active markets
+                if len(found_ids) >= total_active:
+                    progress.update(task, description=f"[green]✓ Found all {total_active} active markets")
+                    break
+
+                # Update progress
+                progress.update(
+                    task,
+                    description=f"[cyan]Found {len(found_ids)}/{total_active} (scanned {total_fetched} markets)"
+                )
+
+                # Stop if we've scanned too many markets without finding all
+                if total_fetched > 5000 and len(found_ids) < total_active * 0.8:
+                    progress.update(
+                        task,
+                        description=f"[yellow]Found {len(found_ids)}/{total_active} markets (stopped after {total_fetched})"
+                    )
+                    break
+
+        print(f"\n✓ Fetched details for {len(active_markets)} active markets (scanned {total_fetched} total)\n")
+
+        # Apply user limit if specified
         if limit and len(active_markets) > limit:
             active_markets = active_markets[:limit]
-            print(f"Limited to {limit} markets")
+            print(f"Limited to {limit} markets\n")
 
         # Create price lookup from simplified markets
         price_lookup = {}
         for sm in simplified_markets:
-            cond_id = sm['condition_id']
             if 'tokens' in sm:
                 for token in sm['tokens']:
                     price_lookup[token['token_id']] = token.get('price')
 
+        # Store markets with progress indicator
+        print(f"[3/3] Storing {len(active_markets)} markets with prices...")
+
         markets_stored = 0
         prices_stored = 0
 
-        print(f"Storing {len(active_markets)} markets with prices...")
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+        ) as progress:
+            task = progress.add_task("[cyan]Storing markets...", total=len(active_markets))
 
-        for market in active_markets:
-            try:
-                # Store market
-                self.db.upsert_market(market)
+            for market in active_markets:
+                try:
+                    # Store market
+                    self.db.upsert_market(market)
 
-                # Store tokens with prices
-                if 'tokens' in market and isinstance(market['tokens'], list):
-                    for token in market['tokens']:
-                        # Store token
-                        self.db.upsert_token(
-                            token_id=token['token_id'],
-                            condition_id=market['condition_id'],
-                            outcome=token.get('outcome', 'UNKNOWN')
-                        )
-
-                        # Store price if available
-                        token_id = token['token_id']
-                        if token_id in price_lookup and price_lookup[token_id] is not None:
-                            self.db.insert_price(
-                                token_id=token_id,
+                    # Store tokens with prices
+                    if 'tokens' in market and isinstance(market['tokens'], list):
+                        for token in market['tokens']:
+                            # Store token
+                            self.db.upsert_token(
+                                token_id=token['token_id'],
                                 condition_id=market['condition_id'],
-                                price=float(price_lookup[token_id])
+                                outcome=token.get('outcome', 'UNKNOWN')
                             )
-                            prices_stored += 1
 
-                markets_stored += 1
+                            # Store price if available
+                            token_id = token['token_id']
+                            if token_id in price_lookup and price_lookup[token_id] is not None:
+                                self.db.insert_price(
+                                    token_id=token_id,
+                                    condition_id=market['condition_id'],
+                                    price=float(price_lookup[token_id])
+                                )
+                                prices_stored += 1
 
-            except Exception as e:
-                print(f"Error storing market {market.get('condition_id', 'unknown')}: {e}")
+                    markets_stored += 1
+                    progress.update(task, advance=1)
 
-        print(f"✓ Stored {markets_stored} markets and {prices_stored} prices")
+                except Exception as e:
+                    print(f"\n  Error storing market {market.get('condition_id', 'unknown')[:20]}...: {e}")
+
+        print(f"\n✓ Stored {markets_stored} markets and {prices_stored} prices")
         return {
             'markets': markets_stored,
             'prices': prices_stored
@@ -204,33 +267,42 @@ class PolymarketScanner:
         markets = self.fetch_all_markets(limit=limit)
         stored_count = 0
 
-        print("Storing markets in database...")
+        print(f"\nStoring {len(markets)} markets in database...")
 
-        for market in markets:
-            try:
-                # Store market
-                self.db.upsert_market(market)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+        ) as progress:
+            task = progress.add_task("[cyan]Storing markets...", total=len(markets))
 
-                # Store tokens (YES/NO outcomes)
-                if 'tokens' in market and isinstance(market['tokens'], list):
-                    for token in market['tokens']:
-                        self.db.upsert_token(
-                            token_id=token['token_id'],
-                            condition_id=market['condition_id'],
-                            outcome=token.get('outcome', 'UNKNOWN')
-                        )
+            for market in markets:
+                try:
+                    # Store market
+                    self.db.upsert_market(market)
 
-                stored_count += 1
+                    # Store tokens (YES/NO outcomes)
+                    if 'tokens' in market and isinstance(market['tokens'], list):
+                        for token in market['tokens']:
+                            self.db.upsert_token(
+                                token_id=token['token_id'],
+                                condition_id=market['condition_id'],
+                                outcome=token.get('outcome', 'UNKNOWN')
+                            )
 
-            except Exception as e:
-                print(f"Error storing market {market.get('condition_id', 'unknown')}: {e}")
+                    stored_count += 1
+                    progress.update(task, advance=1)
 
-        print(f"✓ Stored {stored_count} markets")
+                except Exception as e:
+                    print(f"\n  Error storing market {market.get('condition_id', 'unknown')}: {e}")
+
+        print(f"\n✓ Stored {stored_count} markets")
         return stored_count
 
     def scan_and_store_prices(self, active_only: bool = True) -> int:
         """Scan current prices and store in database"""
-        print("Fetching current prices...")
+        print("\nFetching current prices...")
 
         markets = self.db.get_all_active_markets() if active_only else []
 
@@ -238,42 +310,66 @@ class PolymarketScanner:
             print("No active markets found. Run scan_and_store_markets() first.")
             return 0
 
-        stored_count = 0
-        errors = 0
-
+        # Count total tokens
+        total_tokens = 0
         for market in markets:
-            condition_id = market['condition_id']
-
-            # Get tokens for this market
             with self.db.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    'SELECT token_id, outcome FROM tokens WHERE condition_id = ?',
-                    (condition_id,)
+                    'SELECT COUNT(*) as count FROM tokens WHERE condition_id = ?',
+                    (market['condition_id'],)
                 )
-                tokens = [dict(row) for row in cursor.fetchall()]
+                total_tokens += cursor.fetchone()['count']
 
-            # Fetch and store price for each token
-            for token in tokens:
-                token_id = token['token_id']
-                price_data = self.fetch_market_prices(token_id)
+        stored_count = 0
+        errors = 0
 
-                if price_data and price_data['midpoint'] is not None:
-                    try:
-                        self.db.insert_price(
-                            token_id=token_id,
-                            condition_id=condition_id,
-                            price=price_data['midpoint'],
-                            timestamp=price_data['timestamp']
-                        )
-                        stored_count += 1
-                    except Exception as e:
-                        errors += 1
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+        ) as progress:
+            task = progress.add_task(
+                f"[cyan]Fetching prices for {len(markets)} markets...",
+                total=total_tokens
+            )
 
-                # Rate limiting
-                time.sleep(0.05)
+            for market in markets:
+                condition_id = market['condition_id']
 
-        print(f"✓ Stored {stored_count} price points ({errors} errors)")
+                # Get tokens for this market
+                with self.db.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        'SELECT token_id, outcome FROM tokens WHERE condition_id = ?',
+                        (condition_id,)
+                    )
+                    tokens = [dict(row) for row in cursor.fetchall()]
+
+                # Fetch and store price for each token
+                for token in tokens:
+                    token_id = token['token_id']
+                    price_data = self.fetch_market_prices(token_id)
+
+                    if price_data and price_data['midpoint'] is not None:
+                        try:
+                            self.db.insert_price(
+                                token_id=token_id,
+                                condition_id=condition_id,
+                                price=price_data['midpoint'],
+                                timestamp=price_data['timestamp']
+                            )
+                            stored_count += 1
+                        except Exception as e:
+                            errors += 1
+
+                    progress.update(task, advance=1)
+
+                    # Rate limiting
+                    time.sleep(0.05)
+
+        print(f"\n✓ Stored {stored_count} price points ({errors} errors)")
         return stored_count
 
     def full_scan(self, market_limit: Optional[int] = None) -> Dict[str, int]:

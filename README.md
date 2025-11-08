@@ -41,22 +41,33 @@ cp .env.example .env
 
 ### 1. Initial Scan
 
-First, scan Polymarket to populate the database. **For testing, start with a limited number of markets:**
+**⚡ RECOMMENDED: Scan only active markets (fast - ~3 seconds!)**
 
 ```bash
-# Scan with limit (recommended for first run)
-python polymarket_scanner.py scan --limit 100
-
-# Or scan all markets (may take a long time - 60,000+ markets!)
-python polymarket_scanner.py scan
+# Scan ONLY markets accepting orders (~13 active markets)
+python polymarket_scanner.py scan-active
 ```
 
 This will:
-- Fetch markets from Polymarket (up to the specified limit)
-- Store market data in the database
-- Record current prices for all active markets
+- Find markets currently accepting orders (~13 markets)
+- Fetch full details using smart batch fetching
+- Store prices directly from API
+- **Complete in ~3 seconds** with progress bars
 
-**Note:** Without a limit, scanning can take 30+ minutes and store 60,000+ markets. Start with `--limit 100` to test the system first.
+**Alternative: Scan with limit (for testing or historical data)**
+
+```bash
+# Scan with limit (recommended for testing)
+python polymarket_scanner.py scan --limit 100
+
+# Or scan all markets (takes 30+ minutes - 60,000+ markets!)
+python polymarket_scanner.py scan
+```
+
+**Performance Comparison:**
+- `scan-active`: ~3 seconds, 13 active markets, includes prices ⚡
+- `scan --limit 100`: ~9 seconds, 100 markets (mostly old/closed)
+- `scan --limit 10000`: ~10 minutes, 10,000 markets (mostly old/closed)
 
 ### 2. Check for Changes
 
@@ -138,6 +149,28 @@ python polymarket_scanner.py scan --limit 100
 
 # Scan all markets
 python polymarket_scanner.py scan
+```
+
+### `scan-active` ⚡
+Scan only active markets accepting orders (FAST - ~3 seconds).
+
+```bash
+python polymarket_scanner.py scan-active [OPTIONS]
+
+Options:
+  -l, --limit INTEGER  Maximum number of active markets to fetch
+```
+
+**Features:**
+- Smart batch fetching (stops early when all active markets found)
+- Progress bars for all stages
+- Includes prices directly from API
+- ~97% faster than full scan (3s vs 2+ minutes)
+
+**Example:**
+```bash
+# Scan all active markets (recommended!)
+python polymarket_scanner.py scan-active
 ```
 
 ### `changes`
